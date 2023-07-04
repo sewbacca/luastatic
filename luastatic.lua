@@ -111,6 +111,14 @@ local function is_binary_library(extension)
 		extension == "lib"
 end
 
+local function arg_is_winmain(arg)
+	return
+		-- Mingw
+		arg == '-mwindows' or
+		-- msvc
+		arg == '/ENTRY:WinMainCRTStartup'
+end
+
 -- Required Lua source files.
 local lua_source_files = {}
 -- Libraries for required Lua binary modules.
@@ -128,6 +136,7 @@ if not is_windows then
 end
 
 local link_with_libdl = ""
+local define_winmain = false
 
 --[[
 Parse command line arguments. main.lua must be the first argument. Static libraries are 
@@ -196,6 +205,9 @@ for i, name in ipairs(arg) do
 	else
 		-- Forward the remaining arguments to the C compiler.
 		table.insert(other_arguments, name)
+		if is_windows and arg_is_winmain(name) then
+			define_winmain = true
+		end
 	end
 end
 
@@ -209,7 +221,9 @@ usage: luastatic main.lua[1] require.lua[2] liblua.a[3] library.a[4] -I/include/
   [3]: The path to the Lua interpreter static library
   [4]: One or more static libraries for a required Lua binary module
   [5]: The path to the directory containing lua.h
-  [6]: Additional arguments are passed to the C compiler]])
+  [6]: Additional arguments are passed to the C compiler
+       Windows: To build a non-console application use '-mwindows' (MinGW) or
+                '/ENTRY:WinMainCRTStartup' (MSVC)]])
 	os.exit(1)
 end
 
@@ -461,6 +475,36 @@ out([[
 	return 0;
 }
 ]])
+
+if define_winmain then
+	out([[
+#include <windows.h>
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
+{
+	LPWSTR* argvW;
+	int argc, i;
+	char** argv;
+
+	// Get the command line arguments
+	argvW = CommandLineToArgvW(GetCommandLineW(), &argc);
+
+	// Allocate memory on the stack for argv
+	argv = (char**)alloca(sizeof(char*) * argc);
+
+	// Convert wide character strings to multibyte strings and store in argv
+	for (i = 0; i < argc; i++)
+	{
+		int len = WideCharToMultiByte(CP_UTF8, 0, argvW[i], -1, NULL, 0, NULL, NULL);
+		argv[i] = (char*)alloca(len);
+		WideCharToMultiByte(CP_UTF8, 0, argvW[i], -1, argv[i], len, NULL, NULL);
+	}
+
+	// Call your existing main function
+	int result = main(argc, argv);
+
+	return result;
+}]])
+end
 
 outfile:close()
 
